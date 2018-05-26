@@ -132,18 +132,9 @@ Q_GET_ALL_GROUP_ATTRIBUTES = """
     FROM pg_group;
     """
 
-Q_GET_ALL_MEMBERSHIPS = """
-    SELECT
-        auth_member.rolname AS member,
-        auth_group.rolname AS group
-    FROM
-        pg_auth_members link_table
-        JOIN pg_authid auth_member
-            ON link_table.member = auth_member.oid
-        JOIN pg_authid auth_group
-            ON link_table.roleid = auth_group.oid
-    ;
-    """
+Q_GET_ALL_USERS = "SELECT * FROM pg_user"
+
+Q_GET_ALL_GROUPS = "SELECT * FROM pg_group"
 
 Q_GET_ALL_RAW_OBJECT_ATTRIBUTES = """
     WITH relkind_mapping (objkey, kind) AS (
@@ -487,9 +478,31 @@ class DatabaseContext(object):
         return all_object_owners
 
     def get_all_memberships(self):
-        """ Return a list of tuple, where each tuple is (member, group) """
-        common.run_query(self.cursor, self.verbose, Q_GET_ALL_MEMBERSHIPS)
-        return self.cursor.fetchall()
+        """ First return a list of tuple, where each tuple is (group, members)"""
+        common.run_query(self.cursor, self.verbose, Q_GET_ALL_GROUPS)
+        groups_columns = [column[0] for column in self.cursor.description]
+        groups = []
+        for row in self.cursor.fetchall():
+            groups.append(dict(zip(groups_columns, row)))
+        
+        """ Now get the user ids"""
+        common.run_query(self.cursor, self.verbose, Q_GET_ALL_USERS)
+        users_columns = [column[0] for column in self.cursor.description]
+        users = []
+        for row in self.cursor.fetchall():
+            users.append(dict(zip(users_columns, row)))
+        
+        """ Transform into a list of tuples, where each tuple is (membername, groupname) """
+        all_memberships = []
+        for group in groups:
+            groupname = group['groname']
+            useids = group['grolist']
+            if not useids:
+                continue
+            for usesysid in useids:
+                membername = next((user['usename'] for user in users if user["usesysid"] == usesysid))
+                all_memberships.append((membername, groupname))
+        return all_memberships
 
     def get_all_schemas_and_owners(self):
         """ Return a dict of {schema_name: schema_owner} """

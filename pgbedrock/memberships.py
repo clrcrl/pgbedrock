@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 
 SKIP_SUPERUSER_MEMBERSHIPS_MSG = '-- Skipping membership configuration for superuser "{}"'
 
-Q_GRANT_MEMBERSHIP = 'GRANT "{}" TO "{}";'
-Q_REVOKE_MEMBERSHIP = 'REVOKE "{}" FROM "{}";'
+Q_GRANT_MEMBERSHIP = 'ALTER GROUP "{}" ADD USER "{}";'
+Q_REVOKE_MEMBERSHIP = 'ALTER GROUP "{}" DROP USER "{}";'
 
 
 def analyze_memberships(spec, cursor, verbose):
