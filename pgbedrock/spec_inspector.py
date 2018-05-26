@@ -36,27 +36,48 @@ UNOWNED_SCHEMAS_MSG = ('Spec error: Schemas found in database with no owner in s
 VALIDATION_ERR_MSG = 'Spec error: Role "{}", field "{}": {}'
 
 SPEC_SCHEMA_YAML = """
-    can_login:
-        type: boolean
+    role_type:
+        type: string
+        required: True
+        allowed:
+            - user
+            - group
+    password:
+        type: string
+        oneof:
+            - dependencies:
+                role_type: group
+            - required: True
     has_personal_schema:
         type: boolean
+        dependencies:
+            role_type: user
     is_superuser:
         type: boolean
+        dependencies:
+            role_type: user
     attributes:
         type: list
+        dependencies:
+            role_type: user
         schema:
             type: string
             forbidden:
-                - LOGIN
-                - NOLOGIN
-                - SUPERUSER
-                - NOSUPERUSER
+                - CREATEUSER
+                - NOCREATEUSER
+                - CREATEDB
+                - NOCREATEDB 
+                - PASSWORD
     member_of:
         type: list
+        dependencies:
+            role_type: user
         schema:
             type: string
     owns:
         type: dict
+        dependencies:
+            role_type: user
         allowed:
             - schemas
             - tables
@@ -345,9 +366,7 @@ def ensure_valid_schema(spec):
     schema = yaml.load(SPEC_SCHEMA_YAML)
     v = cerberus.Validator(schema)
     for rolename, config in spec.items():
-        if not config:
-            continue
-        v.validate(config)
+        v.validate(config or {})
         for field, err_msg in v.errors.items():
             error_messages.append(VALIDATION_ERR_MSG.format(rolename, field, err_msg[0]))
 

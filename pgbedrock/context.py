@@ -105,22 +105,31 @@ Q_GET_ALL_CURRENT_NONDEFAULTS = """
     ;
     """
 
-Q_GET_ALL_ROLE_ATTRIBUTES = """
+Q_GET_ALL_USER_ATTRIBUTES = """
     SELECT
-        rolbypassrls,
-        rolcanlogin,
-        rolconnlimit,
-        rolcreatedb,
-        rolcreaterole,
-        rolinherit,
-        rolname,
-        rolpassword,
-        rolreplication,
-        rolsuper,
-        rolvaliduntil
-    FROM pg_authid
-    WHERE rolname != 'pg_signal_backend'
-    ;
+        usename AS rolname,
+        'user' AS roltype,
+        usesysid AS rolsysid,
+        useconnlimit AS rolconnlimit,
+        usecreatedb AS rolcreatedb,
+        passwd AS rolpassword,
+        usesuper AS rolsuper,
+        valuntil AS rolvaliduntil
+    FROM pg_user_info
+    WHERE rolname != 'rdsdb';
+    """
+
+Q_GET_ALL_GROUP_ATTRIBUTES = """
+    SELECT
+        groname AS rolname,
+        'group' AS roltype,
+        NULL AS rolsysid,
+        NULL AS rolconnlimit,
+        NULL AS rolcreatedb,
+        NULL AS rolpassword,
+        NULL AS rolsuper,
+        NULL AS rolvaliduntil
+    FROM pg_group;
     """
 
 Q_GET_ALL_MEMBERSHIPS = """
@@ -398,10 +407,29 @@ class DatabaseContext(object):
         except KeyError:
             return set()
 
-    def get_all_role_attributes(self):
-        """ Return a dict with key = rolname and values = all fields in pg_authid """
-        common.run_query(self.cursor, self.verbose, Q_GET_ALL_ROLE_ATTRIBUTES)
+    def get_all_role_type_attributes(self, query):
+        common.run_query(self.cursor, self.verbose, query)
         role_attributes = {row['rolname']: dict(row) for row in self.cursor.fetchall()}
+        return role_attributes
+
+    def get_all_role_attributes(self):
+        role_attributes = {}
+
+        """ Return a dict with key = rolname and values = all fields in pg_user """
+        user_attributes = self.get_all_role_type_attributes(Q_GET_ALL_USER_ATTRIBUTES)
+        role_attributes.update(user_attributes)
+        
+        group_attributes = self.get_all_role_type_attributes(Q_GET_ALL_GROUP_ATTRIBUTES)
+
+        for group, attributes in group_attributes.items():
+            if group not in role_attributes:
+                continue
+            else:
+                common.fail(SHARED_ROLE_NAME_ERROR_MSG.format(group))
+            # to-do: build a list of errors and print all the errors
+
+        role_attributes.update(group_attributes)
+        
         return role_attributes
 
     def get_role_attributes(self, rolename):
