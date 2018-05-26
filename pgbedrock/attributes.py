@@ -15,38 +15,30 @@ logger = logging.getLogger(__name__)
 UNKNOWN_ATTRIBUTE_MSG = "Unknown attribute '{}' provided to ALTER ROLE"
 UNSUPPORTED_CHAR_MSG = 'Password for role "{}" contains an unsupported character: \' or "'
 
-Q_ALTER_CONN_LIMIT = 'ALTER ROLE "{}" WITH CONNECTION LIMIT {}; -- Previous value: {}'
-Q_ALTER_PASSWORD = "ALTER ROLE \"{}\" WITH ENCRYPTED PASSWORD '{}';"
-Q_REMOVE_PASSWORD = "ALTER ROLE \"{}\" WITH PASSWORD NULL;"
-Q_ALTER_ROLE = 'ALTER ROLE "{}" WITH {};'
-Q_ALTER_VALID_UNTIL = "ALTER ROLE \"{}\" WITH VALID UNTIL '{}'; -- Previous value: {}"
-Q_CREATE_ROLE = 'CREATE ROLE "{}";'
+Q_ALTER_CONN_LIMIT = 'ALTER USER "{}" WITH CONNECTION LIMIT {}; -- Previous value: {}'
+Q_ALTER_PASSWORD = "ALTER USER \"{}\" WITH PASSWORD '{}';"
+Q_ALTER_USER = 'ALTER USER "{}" WITH {};' # change to alter user
+Q_ALTER_VALID_UNTIL = "ALTER USER \"{}\" WITH VALID UNTIL '{}'; -- Previous value: {}"
+Q_CREATE_USER = 'CREATE USER "{}" WITH PASSWORD \'{}\';'
+Q_CREATE_GROUP = 'CREATE GROUP "{}";'
+Q_DROP_ROLE = 'DROP {} "{}";'
 
 
 DEFAULT_ATTRIBUTES = {
-    'rolbypassrls': False,
-    'rolcanlogin': False,
-    'rolconnlimit': -1,
+    'rolisuser': True,
+    'rolconnlimit': 'UNLIMITED',
     'rolcreatedb': False,
-    'rolcreaterole': False,
-    'rolinherit': True,
     'rolpassword': None,
-    'rolreplication': False,
     'rolsuper': False,
     'rolvaliduntil': None,
 }
 
 # Map to how the attribute is referred to within pg_authid
 PG_COLUMN_NAME = {
-    'BYPASSRLS': 'rolbypassrls',
     'CONNECTION LIMIT': 'rolconnlimit',
     'CREATEDB': 'rolcreatedb',
-    'CREATEROLE': 'rolcreaterole',
-    'INHERIT': 'rolinherit',
-    'LOGIN': 'rolcanlogin',
     'PASSWORD': 'rolpassword',
-    'REPLICATION': 'rolreplication',
-    'SUPERUSER': 'rolsuper',
+    'CREATEUSER': 'rolsuper',
     'VALID UNTIL': 'rolvaliduntil'
 }
 
@@ -69,13 +61,14 @@ def analyze_attributes(spec, cursor, verbose):
             logger.debug('Starting to analyze role {}'.format(rolename))
 
             spec_config = spec_config or {}
+            spec_role_type = spec_config.get('role_type', 'user')
             spec_attributes = spec_config.get('attributes', [])
 
-            for keyword, attribute in (('can_login', 'LOGIN'), ('is_superuser', 'SUPERUSER')):
+            for keyword, attribute in (('is_superuser', 'CREATEUSER'), ('is_superuser', 'CREATEDB')):
                 is_desired = spec_config.get(keyword, False)
                 spec_attributes.append(attribute if is_desired else 'NO' + attribute)
 
-            roleconf = AttributeAnalyzer(rolename, spec_attributes, dbcontext)
+            roleconf = AttributeAnalyzer(rolename, spec_role_type, spec_attributes, dbcontext)
             roleconf.analyze()
             all_sql_to_run += roleconf.sql_to_run
             password_all_sql_to_run += roleconf.password_sql_to_run
@@ -102,8 +95,9 @@ class AttributeAnalyzer(object):
     make it match the provided spec attributes. Note that spec_attributes is a list whereas
     current_attributes is a dict. """
 
-    def __init__(self, rolename, spec_attributes, dbcontext):
+    def __init__(self, rolename, spec_role_type, spec_attributes, dbcontext):
         self.sql_to_run = []
+        self.roletype = spec_role_type
         self.rolename = common.check_name(rolename)
         logger.debug('self.rolename set to {}'.format(self.rolename))
         self.spec_attributes = spec_attributes
@@ -118,13 +112,25 @@ class AttributeAnalyzer(object):
         if not self.role_exists():
             self.create_role()
 
-        desired_attributes = self.coalesce_attributes()
-        self.set_all_attributes(desired_attributes)
-        return self.sql_to_run
+        if self.is_user():
+            desired_attributes = self.coalesce_attributes()
+            self.set_all_attributes(desired_attributes)
+            return self.sql_to_run
+
+    def is_user(self):
+        return self.roletype == 'user'
 
     def create_role(self):
-        query = Q_CREATE_ROLE.format(self.rolename)
+        if self.is_user():
+            # in Redshift, when creating a user, a password MUST be provided
+            desired_value ='Pa55w0rd'
+            query = Q_CREATE_USER.format(self.rolename, desired_value)
+
+        elif self.roletype == 'group':
+            query = Q_CREATE_GROUP.format(self.rolename)
+        
         self.sql_to_run.append(query)
+
 
     def coalesce_attributes(self):
         """ Override default attributes with user-provided ones and verify attributes are
@@ -231,15 +237,12 @@ class AttributeAnalyzer(object):
             base_keyword = COLUMN_NAME_TO_KEYWORD[attribute]
             # prepend 'NO' if desired_value is False
             keyword = base_keyword if desired_value else 'NO' + base_keyword
-            query = Q_ALTER_ROLE.format(self.rolename, keyword)
+            query = Q_ALTER_USER.format(self.rolename, keyword)
 
         self.sql_to_run.append(query)
 
     def set_password(self, desired_value):
-        if desired_value is None:
-            actual_query = Q_REMOVE_PASSWORD.format(self.rolename)
-        else:
-            actual_query = Q_ALTER_PASSWORD.format(self.rolename, desired_value)
+        actual_query = Q_ALTER_PASSWORD.format(self.rolename, desired_value)
         self.password_sql_to_run.append(actual_query)
 
         sanitized_query = Q_ALTER_PASSWORD.format(self.rolename, '******')
