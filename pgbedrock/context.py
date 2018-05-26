@@ -138,16 +138,20 @@ Q_GET_ALL_GROUPS = "SELECT * FROM pg_group"
 
 Q_GET_ALL_RAW_OBJECT_ATTRIBUTES = """
     WITH relkind_mapping (objkey, kind) AS (
-        VALUES ('r', 'tables'),
-               ('v', 'tables'),
-               ('m', 'tables'),
-               ('f', 'tables'),
-               ('S', 'sequences')
+        SELECT 'r' AS objkey, 'tables' AS kind
+        UNION
+        SELECT 'v', 'tables'
+        UNION
+        SELECT 'm', 'tables'
+        UNION
+        SELECT'f', 'tables'
+        UNION
+        SELECT 'S', 'sequences'
     ), tables_and_sequences AS (
         SELECT
             map.kind,
             nsp.nspname AS schema,
-            nsp.nspname || '."' || c.relname || '"' AS name,
+            '"' || nsp.nspname || '"."' || c.relname || '"' AS name,
             c.relowner AS owner_id,
             -- Auto-dependency means that a sequence is linked to a table. Ownership of
             -- that sequence automatically derives from the table's ownership
@@ -187,13 +191,14 @@ Q_GET_ALL_RAW_OBJECT_ATTRIBUTES = """
         co.kind,
         co.schema,
         co.name,
-        t_owner.rolname AS owner,
+        t_owner.usename AS owner,
         co.is_dependent
     FROM combined AS co
-    JOIN pg_authid t_owner
-        ON co.owner_id = t_owner.OID
+    JOIN pg_user t_owner
+        ON co.owner_id = t_owner.usesysid
     WHERE
-        co.schema NOT LIKE 'pg\_t%'
+        co.schema NOT LIKE 'pg\\_%'
+        AND co.schema != 'information_schema'
     ;
     """
 
