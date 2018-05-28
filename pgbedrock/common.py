@@ -20,6 +20,14 @@ FAILED_QUERY_MSG = 'Failed to execute query "{}": {}'
 UNSUPPORTED_CHAR_MSG = 'Role "{}" contains an unsupported character: \' or "'
 PROGRESS_TEMPLATE = '%(label)s  [%(bar)s]  %(info)s'
 
+ACL_PRIVILEGE_MAP = {
+    'r': 'SELECT',
+    'a': 'INSERT',
+    'w': 'UPDATE',
+    'd': 'DELETE',
+    'x': 'REFERENCES',
+    'X': 'EXECUTE',
+}
 
 def check_name(name):
     if "'" in name or '"' in name:
@@ -47,7 +55,7 @@ def ensure_quoted_identifier(objname):
     if nonschema.startswith('"') and nonschema.endswith('"'):
         return objname
 
-    return '{}."{}"'.format(schema, nonschema)
+    return '"{}"."{}"'.format(schema, nonschema)
 
 
 def fail(msg):
@@ -86,3 +94,25 @@ def run_query(cursor, verbose, query):
         else:
             click.secho(FAILED_QUERY_MSG.format(query, e), fg='red')
         sys.exit(1)
+
+def aclexplode(aclitem):
+    aclitem_list = [x.strip('{}"') for x in aclitem.split(',')]
+    aclitem_exploded = []   
+
+    for acl in aclitem_list:
+        grantee, privilege_string, grantor = [x.strip() for x in acl.replace('=','/').split('/')]
+        if grantee and grantee not in ('rdsdb') and grantee != grantor: # TBC if I should be ignoring the null case - that's when it's granted to PUBLIC
+            role_name = grantee.split(' ')[-1]
+            try:
+                role_type =  grantee.split(' ')[1]
+            except IndexError:
+                role_type = 'user'
+
+            if privilege_string == 'arwdRxt':
+                privileges = ['ALL']
+            else:
+                privileges = [ACL_PRIVILEGE_MAP[letter] for letter in privilege_string]
+
+            aclitem_exploded.append({'role_name': role_name, 'role_type': role_type, 'privileges': privileges, 'grantor': grantor})
+
+    return aclitem_exploded

@@ -9,99 +9,84 @@ logger = logging.getLogger(__name__)
 
 
 Q_GET_ALL_CURRENT_DEFAULTS = """
-    WITH relkind_mapping (objkey, objkind) AS (
-        VALUES ('f', 'functions'),
-               ('r', 'tables'),
-               ('S', 'sequences'),
-               ('T', 'types')
-    ), subq AS (
-        SELECT
-            auth.rolname AS grantor,
-            auth.oid AS grantor_oid,
-            (aclexplode(def.defaclacl)).grantee AS grantee_oid,
-            nsp.nspname,
-            map.objkind,
-            (aclexplode(def.defaclacl)).privilege_type
-        FROM
-            pg_default_acl def
-            JOIN pg_authid auth
-                    ON def.defaclrole = auth.oid
-            JOIN pg_namespace nsp
-                    ON def.defaclnamespace = nsp.oid
-            JOIN relkind_mapping map
-                    ON def.defaclobjtype = map.objkey
-        WHERE
-            def.defaclacl IS NOT NULL
+    WITH relkind_mapping AS (
+        SELECT 'r' AS objkey, 'tables' AS objkind
+        UNION
+        SELECT 'v', 'tables'
+        UNION
+        SELECT 'm', 'tables'
+        UNION
+        SELECT 'f', 'tables'
+        UNION
+        SELECT 'S', 'sequences'
     )
     SELECT
-        t_grantee.rolname AS grantee,
-        subq.objkind,
-        subq.grantor,
-        subq.nspname AS schema,
-        subq.privilege_type
+        auth.usename AS grantor,
+        auth.usesysid AS grantor_id,
+        def.defaclacl AS acl,
+        nsp.nspname,
+        map.objkind
     FROM
-        subq
-        JOIN pg_authid t_grantee
-            ON subq.grantee_oid = t_grantee.oid
+        pg_default_acl def
+        JOIN pg_user auth
+                ON def.defacluser = auth.usesysid
+        JOIN pg_namespace nsp
+                ON def.defaclnamespace = nsp.OID
+        JOIN relkind_mapping map
+                ON def.defaclobjtype = map.objkey
     WHERE
-        subq.grantor_oid != subq.grantee_oid
+        def.defaclacl IS NOT NULL
     ;
     """
 
 Q_GET_ALL_CURRENT_NONDEFAULTS = """
-    WITH relkind_mapping (objkey, objkind) AS (
-        VALUES ('r', 'tables'),
-               ('v', 'tables'),
-               ('m', 'tables'),
-               ('f', 'tables'),
-               ('S', 'sequences')
+    WITH relkind_mapping AS (
+        SELECT 'r' AS objkey, 'tables' AS objkind
+        UNION
+        SELECT 'v', 'tables'
+        UNION
+        SELECT 'm', 'tables'
+        UNION
+        SELECT 'f', 'tables'
+        UNION
+        SELECT 'S', 'sequences'
     ), tables_and_sequences AS (
-        SELECT
-            -- We have to wrap the table name in double quotes in case there's a dot, e.g.
-            -- jdoe.jdoe.bar (note: this is often a mistake on the table creator's part)
-            nsp.nspname || '."' || c.relname || '"' AS objname,
-            map.objkind,
-            (aclexplode(c.relacl)).grantee AS grantee_oid,
-            t_owner.rolname AS owner,
-            (aclexplode(c.relacl)).privilege_type
-        FROM
-            pg_class c
-            JOIN pg_authid t_owner
-                ON c.relowner = t_owner.OID
-            JOIN pg_namespace nsp
-                ON c.relnamespace = nsp.oid
-            JOIN relkind_mapping map
-                ON c.relkind = map.objkey
-        WHERE
-            nsp.nspname NOT LIKE 'pg\_t%'
-            AND c.relacl IS NOT NULL
-    ), schemas AS (
-        SELECT
-             nsp.nspname AS objname,
-             'schemas'::TEXT AS objkind,
-             (aclexplode(nsp.nspacl)).grantee AS grantee_oid,
-             t_owner.rolname AS owner,
-             (aclexplode(nsp.nspacl)).privilege_type
-        FROM pg_namespace nsp
-        JOIN pg_authid t_owner
-            ON nsp.nspowner = t_owner.OID
-    ), combined AS (
-        SELECT *
-        FROM tables_and_sequences
-        UNION ALL
-        SELECT *
-        FROM schemas
-    )
     SELECT
-        t_grantee.rolname AS grantee,
-        combined.objkind,
-        combined.objname,
-        combined.privilege_type
+        -- We have to wrap the table name in double quotes in case there's a dot, e.g.
+        -- jdoe.jdoe.bar (note: this is often a mistake on the table creator's part)
+        '"' || nsp.nspname || '"."' || c.relname || '"' AS objname,
+        map.objkind,
+        t_owner.usename                         AS owner,
+        c.relacl                                AS acl
     FROM
-        combined
-        JOIN pg_authid t_grantee
-            ON combined.grantee_oid = t_grantee.oid
-        WHERE combined.owner != t_grantee.rolname
+        pg_class c
+        JOIN pg_user t_owner
+            ON c.relowner = t_owner.usesysid
+        JOIN pg_namespace nsp
+            ON c.relnamespace = nsp.oid
+        JOIN relkind_mapping map
+            ON c.relkind = map.objkey
+    WHERE
+        nsp.nspname NOT LIKE 'pg\_t%'
+        AND nsp.nspname != 'information_schema'
+        AND c.relacl IS NOT NULL
+    ), schemas AS (
+    SELECT
+        nsp.nspname                      AS objname,
+        'schemas' :: TEXT                AS objkind,
+        t_owner.usename                  AS owner,
+        nsp.nspacl                       AS acl
+    FROM pg_namespace nsp
+        JOIN pg_user t_owner
+            ON nsp.nspowner = t_owner.usesysid
+    )
+
+    SELECT *
+    FROM tables_and_sequences
+    UNION ALL
+    SELECT *
+    FROM schemas
+    WHERE acl IS NOT NULL
     ;
     """
 
@@ -150,7 +135,7 @@ Q_GET_ALL_RAW_OBJECT_ATTRIBUTES = """
     ), tables_and_sequences AS (
         SELECT
             map.kind,
-            nsp.nspname AS schema,
+            '"' || nsp.nspname || '"' AS schema,
             '"' || nsp.nspname || '"."' || c.relname || '"' AS name,
             c.relowner AS owner_id,
             -- Auto-dependency means that a sequence is linked to a table. Ownership of
@@ -295,26 +280,29 @@ class DatabaseContext(object):
             This will not include privileges granted by this role to itself
         """
         DefaultRow = namedtuple('DefaultRow',
-                                ['grantee', 'objkind', 'grantor', 'schema', 'privilege'])
+                                ['grantee', 'role_type', 'objkind', 'grantor', 'schema', 'privilege'])
         common.run_query(self.cursor, self.verbose, Q_GET_ALL_CURRENT_DEFAULTS)
 
         current_defaults = defaultdict(dict)
         for i in self.cursor.fetchall():
-            row = DefaultRow(*i)
-            is_read_priv = row.privilege in PRIVILEGE_MAP[row.objkind]['read']
-            access_key = 'read' if is_read_priv else 'write'
+            aclitem_exploded = common.aclexplode(i['acl'])
+            for role in aclitem_exploded:
+                for privilege in role['privileges']:
+                    row = DefaultRow(role['role_name'], role['role_type'], i['objkind'], role['grantor'], i['nspname'], privilege)
+                    is_read_priv = row.privilege in PRIVILEGE_MAP[row.objkind]['read']
+                    access_key = 'read' if is_read_priv else 'write'
 
-            entry = (row.grantor, row.schema, row.privilege)
-            role_defaults = current_defaults[row.grantee]
+                    entry = (row.grantor, row.schema, row.privilege)
+                    role_defaults = current_defaults[row.grantee]
 
-            # Create this role's dict substructure for the first entry we come across
-            if row.objkind not in role_defaults:
-                role_defaults[row.objkind] = {
-                    'read': set(),
-                    'write': set(),
-                }
+                    # Create this role's dict substructure for the first entry we come across
+                    if row.objkind not in role_defaults:
+                        role_defaults[row.objkind] = {
+                            'read': set(),
+                            'write': set(),
+                        }
 
-            role_defaults[row.objkind][access_key].add(entry)
+                    role_defaults[row.objkind][access_key].add(entry)
 
         return current_defaults
 
@@ -369,26 +357,29 @@ class DatabaseContext(object):
             This will not include privileges granted by this role to itself
         """
         NonDefaultRow = namedtuple('NonDefaultRow',
-                                   ['grantee', 'objkind', 'objname', 'privilege'])
+                                   ['grantee', 'roletype', 'objkind', 'objname', 'privilege'])
         common.run_query(self.cursor, self.verbose, Q_GET_ALL_CURRENT_NONDEFAULTS)
         current_nondefaults = defaultdict(dict)
 
         for i in self.cursor.fetchall():
-            row = NonDefaultRow(*i)
-            is_read_priv = row.privilege in PRIVILEGE_MAP[row.objkind]['read']
-            access_key = 'read' if is_read_priv else 'write'
+            aclitem_exploded = common.aclexplode(i['acl'])
+            for role in aclitem_exploded:
+                for privilege in role['privileges']:
+                    row = NonDefaultRow(role['role_name'], role['role_type'], i['objkind'], i['objname'], privilege)
+                    is_read_priv = row.privilege in PRIVILEGE_MAP[row.objkind]['read']
+                    access_key = 'read' if is_read_priv else 'write'
 
-            entry = (row.objname, row.privilege)
-            role_defaults = current_nondefaults[row.grantee]
+                    entry = (row.objname, row.privilege)
+                    role_defaults = current_nondefaults[row.grantee]
 
-            # Create this role's dict substructure for the first entry we come across
-            if row.objkind not in role_defaults:
-                role_defaults[row.objkind] = {
-                    'read': set(),
-                    'write': set(),
-                }
+                    # Create this role's dict substructure for the first entry we come across
+                    if row.objkind not in role_defaults:
+                        role_defaults[row.objkind] = {
+                            'read': set(),
+                            'write': set(),
+                        }
 
-            role_defaults[row.objkind][access_key].add(entry)
+                    role_defaults[row.objkind][access_key].add(entry)
 
         return current_nondefaults
 

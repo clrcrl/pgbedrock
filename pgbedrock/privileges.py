@@ -17,17 +17,17 @@ PERSONAL_SCHEMAS_ERROR_MSG = ("Unable to interpret reserved keyword 'personal_sc
 OBJECT_DOES_NOT_EXIST_ERROR_MSG = "{} '{}' requested for role \"{}\" does not exist"
 OBJECTS_WITH_DEFAULTS = ('functions', 'tables', 'sequences', 'types')
 
-Q_GRANT_NONDEFAULT = 'GRANT {} ON {} {} TO "{}";'
-Q_REVOKE_NONDEFAULT = 'REVOKE {} ON {} {} FROM "{}";'
+Q_GRANT_NONDEFAULT = 'GRANT {} ON {} {} TO {} "{}";'
+Q_REVOKE_NONDEFAULT = 'REVOKE {} ON {} {} FROM {} "{}";'
 Q_GRANT_DEFAULT = """
-    SET ROLE "{}";
-    ALTER DEFAULT PRIVILEGES IN SCHEMA {} GRANT {} ON {} TO "{}";
-    RESET ROLE;
+    SET SESSION AUTHORIZATION "{}";
+    ALTER DEFAULT PRIVILEGES IN SCHEMA {} GRANT {} ON {} TO {} "{}";
+    SET SESSION AUTHORIZATION DEFAULT;
     """
 Q_REVOKE_DEFAULT = """
-    SET ROLE "{}";
-    ALTER DEFAULT PRIVILEGES IN SCHEMA {} REVOKE {} ON {} FROM "{}";
-    RESET ROLE;
+    SET SESSION AUTHORIZATION "{}";
+    ALTER DEFAULT PRIVILEGES IN SCHEMA {} REVOKE {} ON {} FROM {} "{}";
+    SET SESSION AUTHORIZATION DEFAULT;
     """
 
 
@@ -46,6 +46,7 @@ def analyze_privileges(spec, cursor, verbose):
         all_sql_to_run = []
         for rolename, config in all_roles:
             config = config or {}
+            roletype = config['role_type']
             if dbcontext.is_superuser(rolename):
                 all_sql_to_run.append(
                     SKIP_SUPERUSER_PRIVILEGE_CONFIGURATION_MSG.format(rolename)
@@ -64,6 +65,7 @@ def analyze_privileges(spec, cursor, verbose):
                         desired_items += desired_items_this_obj.get('write', [])
 
                     privconf = PrivilegeAnalyzer(rolename=rolename,
+                                                 roletype=roletype,
                                                  access=access,
                                                  object_kind=object_kind,
                                                  desired_items=desired_items,
@@ -172,11 +174,12 @@ class PrivilegeAnalyzer(object):
     set of items.
     """
 
-    def __init__(self, rolename, access, object_kind, desired_items, schema_writers,
+    def __init__(self, rolename, roletype, access, object_kind, desired_items, schema_writers,
                  personal_schemas, dbcontext):
         log_msg = 'Initializing PrivilegeAnalyzer for rolename "{}", access "{}", and object "{}"'
         logger.debug(log_msg.format(rolename, access, object_kind))
         self.sql_to_run = []
+        self.roletype = roletype
         self.rolename = common.check_name(rolename)
 
         self.access = access
@@ -262,12 +265,21 @@ class PrivilegeAnalyzer(object):
         return self.get_object_owner(schema, objkind='schemas')
 
     def grant_default(self, grantor, schema, privilege):
-        query = Q_GRANT_DEFAULT.format(grantor, schema, privilege, self.object_kind.upper(), self.rolename)
+        query = Q_GRANT_DEFAULT.format(grantor,
+                                       schema,
+                                       privilege,
+                                       self.object_kind.upper(),
+                                       ('' if self.roletype == 'user' else self.roletype).upper(), 
+                                       self.rolename)
         self.sql_to_run.append(query)
 
     def grant_nondefault(self, objname, privilege):
         obj_kind_singular = self.object_kind.upper()[:-1]
-        query = Q_GRANT_NONDEFAULT.format(privilege, obj_kind_singular, objname, self.rolename)
+        query = Q_GRANT_NONDEFAULT.format(privilege,
+                                         obj_kind_singular,
+                                         objname,
+                                         ('' if self.roletype == 'user' else self.roletype).upper(),
+                                         self.rolename)
         self.sql_to_run.append(query)
 
     def identify_desired_objects(self):
@@ -316,10 +328,10 @@ class PrivilegeAnalyzer(object):
             self.determine_desired_defaults(schemas)
 
     def revoke_default(self, grantor, schema, privilege):
-        query = Q_REVOKE_DEFAULT.format(grantor, schema, privilege, self.object_kind.upper(), self.rolename)
+        query = Q_REVOKE_DEFAULT.format(grantor, schema, privilege, self.object_kind.upper(), ('' if self.roletype == 'user' else self.roletype).upper(), self.rolename)
         self.sql_to_run.append(query)
 
     def revoke_nondefault(self, objname, privilege):
         obj_kind_singular = self.object_kind.upper()[:-1]
-        query = Q_REVOKE_NONDEFAULT.format(privilege, obj_kind_singular, objname, self.rolename)
+        query = Q_REVOKE_NONDEFAULT.format(privilege, obj_kind_singular, objname, ('' if self.roletype == 'user' else self.roletype).upper(), self.rolename)
         self.sql_to_run.append(query)
