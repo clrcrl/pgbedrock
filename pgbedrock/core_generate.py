@@ -3,6 +3,7 @@ import logging
 
 import psycopg2.extras
 import yaml
+from dateutil.parser import parse
 
 from pgbedrock import LOG_FORMAT
 from pgbedrock import common
@@ -37,8 +38,7 @@ def add_attributes(spec, dbcontext):
     for rolename, attributes in all_attributes.items():
         role_values = {}
 
-        if attributes.pop('rolcanlogin'):
-            role_values['can_login'] = True
+        role_values['role_type'] = attributes.pop('roltype')
 
         if attributes.pop('rolsuper'):
             role_values['is_superuser'] = True
@@ -104,8 +104,7 @@ def add_nonschema_ownerships(spec, dbcontext, objkind):
     """
     personal_schemas = dbcontext.get_all_personal_schemas()
     all_objects_and_owners = dbcontext.get_all_object_attributes()
-    objects_and_owners = all_objects_and_owners.get(objkind)
-
+    objects_and_owners = all_objects_and_owners.get(objkind, {})
     for schema, objects_and_attributes in objects_and_owners.items():
         # Skip objects in personal schemas; their ownership is already managed by ownerships.py
         if schema in personal_schemas:
@@ -377,16 +376,21 @@ def nondefault_attributes_as_list(rolename, nondefaults):
     results = []
     for attr, val in nondefaults.items():
         if attr == 'rolvaliduntil':
-            valid_until_date = str(val.date())
+            if val != 'infinity':
+                valid_until_date = str(parse(val).date())
+            else:
+                valid_until_date = val
             results.append("VALID UNTIL '{}'".format(valid_until_date))
         elif attr == 'rolconnlimit':
             results.append('CONNECTION LIMIT {}'.format(val))
+
         elif attr == 'rolpassword':
-            # Use underscores since tools like Bamboo do not like dashes in envvar names
-            envvar_rolename = rolename.replace('-', '_').upper()
-            # We put a templated environment variable here instead of rolpassword's val
-            # (which is just an md5 hash anyway)
-            results.append('PASSWORD "{{{{ env[\'{}_PASSWORD\'] }}}}"'.format(envvar_rolename))
+             import ipdb; ipdb.set_trace()
+        #     # Use underscores since tools like Bamboo do not like dashes in envvar names
+        #     envvar_rolename = rolename.replace('-', '_').upper()
+        #     # We put a templated environment variable here instead of rolpassword's val
+        #     # (which is just an md5 hash anyway)
+        #     results.append('PASSWORD "{{{{ env[\'{}_PASSWORD\'] }}}}"'.format(envvar_rolename))
         else:
             keyword = COLUMN_NAME_TO_KEYWORD[attr]
             prefix = '' if val else 'NO'
@@ -420,10 +424,14 @@ def output_spec(spec):
 def remove_default_attributes(attributes):
     nondefaults = {}
     for attr, val in attributes.items():
-        if attr == 'rolvaliduntil' and not is_valid_forever(val):
-            nondefaults[attr] = val
-        elif attr not in ('rolname', 'rolvaliduntil') and val != DEFAULT_ATTRIBUTES[attr]:
-            nondefaults[attr] = val
+        if attr == 'rolvaliduntil':
+            if not is_valid_forever(val):
+                nondefaults[attr] = val
+        elif attr == 'rolpassword':
+            continue
+        else:
+            if attr in DEFAULT_ATTRIBUTES and val != DEFAULT_ATTRIBUTES[attr]:
+                nondefaults[attr] = val
 
     return nondefaults
 

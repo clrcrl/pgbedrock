@@ -27,6 +27,8 @@ ACL_PRIVILEGE_MAP = {
     'd': 'DELETE',
     'x': 'REFERENCES',
     'X': 'EXECUTE',
+    'U': 'USAGE',
+    'C': 'CREATE'
 }
 
 def check_name(name):
@@ -97,7 +99,7 @@ def run_query(cursor, verbose, query):
 
 def aclexplode(aclitem):
     aclitem_list = [x.strip('{}"') for x in aclitem.split(',')]
-    aclitem_exploded = []   
+    aclitem_exploded = []
 
     for acl in aclitem_list:
         grantee, privilege_string, grantor = [x.strip() for x in acl.replace('=','/').split('/')]

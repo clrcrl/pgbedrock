@@ -101,7 +101,7 @@ Q_GET_ALL_USER_ATTRIBUTES = """
         usesuper AS rolsuper,
         valuntil AS rolvaliduntil
     FROM pg_user_info
-    WHERE rolname != 'rdsdb';
+    -- WHERE rolname != 'rdsdb';
     """
 
 Q_GET_ALL_GROUP_ATTRIBUTES = """
@@ -109,11 +109,11 @@ Q_GET_ALL_GROUP_ATTRIBUTES = """
         groname AS rolname,
         'group' AS roltype,
         NULL AS rolsysid,
-        NULL AS rolconnlimit,
+        'UNLIMITED' AS rolconnlimit,
         NULL AS rolcreatedb,
         NULL AS rolpassword,
         NULL AS rolsuper,
-        NULL AS rolvaliduntil
+        'infinity' AS rolvaliduntil
     FROM pg_group;
     """
 
@@ -183,16 +183,17 @@ Q_GET_ALL_RAW_OBJECT_ATTRIBUTES = """
         ON co.owner_id = t_owner.usesysid
     WHERE
         co.schema NOT LIKE 'pg\\_%'
+        AND co.schema NOT LIKE '"pg\\_%' -- this is bad bad not good
         AND co.schema != 'information_schema'
+        AND co.schema != '"information_schema"'
     ;
     """
 
 Q_GET_ALL_PERSONAL_SCHEMAS = """
     SELECT nsp.nspname
     FROM pg_namespace nsp
-        JOIN pg_authid auth
-            ON  nsp.nspname = auth.rolname
-    WHERE auth.rolcanlogin IS TRUE
+        JOIN pg_user auth
+            ON  nsp.nspname = auth.usename
     ;
     """
 
@@ -405,7 +406,7 @@ class DatabaseContext(object):
         """ Return a dict with key = rolname and values = all fields in pg_user """
         user_attributes = self.get_all_role_type_attributes(Q_GET_ALL_USER_ATTRIBUTES)
         role_attributes.update(user_attributes)
-        
+
         group_attributes = self.get_all_role_type_attributes(Q_GET_ALL_GROUP_ATTRIBUTES)
 
         for group, attributes in group_attributes.items():
@@ -416,7 +417,7 @@ class DatabaseContext(object):
             # to-do: build a list of errors and print all the errors
 
         role_attributes.update(group_attributes)
-        
+
         return role_attributes
 
     def get_role_attributes(self, rolename):
@@ -480,14 +481,14 @@ class DatabaseContext(object):
         groups = []
         for row in self.cursor.fetchall():
             groups.append(dict(zip(groups_columns, row)))
-        
+
         """ Now get the user ids"""
         common.run_query(self.cursor, self.verbose, Q_GET_ALL_USERS)
         users_columns = [column[0] for column in self.cursor.description]
         users = []
         for row in self.cursor.fetchall():
             users.append(dict(zip(users_columns, row)))
-        
+
         """ Transform into a list of tuples, where each tuple is (membername, groupname) """
         all_memberships = []
         for group in groups:

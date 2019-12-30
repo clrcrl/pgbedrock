@@ -23,6 +23,9 @@ Q_CREATE_USER = 'CREATE USER "{}" WITH PASSWORD \'{}\';'
 Q_CREATE_GROUP = 'CREATE GROUP "{}";'
 Q_DROP_ROLE = 'DROP {} "{}";'
 
+REQUIRED_ATTRIBUTES = [
+    'role_type'
+]
 
 DEFAULT_ATTRIBUTES = {
     'rolisuser': True,
@@ -30,7 +33,7 @@ DEFAULT_ATTRIBUTES = {
     'rolcreatedb': False,
     'rolpassword': None,
     'rolsuper': False,
-    'rolvaliduntil': None,
+    'rolvaliduntil': 'infinity',
 }
 
 # Map to how the attribute is referred to within pg_authid
@@ -128,7 +131,7 @@ class AttributeAnalyzer(object):
 
         elif self.roletype == 'group':
             query = Q_CREATE_GROUP.format(self.rolename)
-        
+
         self.sql_to_run.append(query)
 
 
